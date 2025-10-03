@@ -1,6 +1,6 @@
 {
-	"name": "some",
-	"description": "A typescript library",
+	"name": "billjs",
+	"description": "A typescript library for billing calculations",
 	"version": "0.1.0",
 	"type": "module",
 	"files": [
@@ -39,5 +39,10 @@
 			"optional": true
 		}
 	},
-	"license": "MIT"
+	"license": "MIT",
+	"author": "Abu Raihan",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/aburaihan/billjs"
+	}
 }
