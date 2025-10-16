@@ -1,13 +1,10 @@
 {
 	"name": "billjs",
-	"description": "A typescript library for billing calculations",
+	"description": "A comprehensive TypeScript billing engine for invoices, receipts, and POS systems with multi-currency, tax localization, and complex calculations",
 	"version": "0.1.0",
 	"type": "module",
-	"files": [
-		"dist"
-	],
-	"module": "./dist/index.js",
 	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
@@ -22,11 +19,42 @@
 		},
 		"./package.json": "./package.json"
 	},
+	"files": [
+		"dist",
+		"docs"
+	],
+	"keywords": [
+		"billing",
+		"invoice",
+		"receipt",
+		"tax",
+		"typescript",
+		"finance",
+		"pos",
+		"ecommerce",
+		"currency",
+		"calculation"
+	],
+	"homepage": "https://billjs.highx.dev?utm_src=github",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/highxai/billjs.git"
+	},
+	"bugs": {
+		"url": "https://github.com/highxai/billjs/issues"
+	},
+	"license": "MIT",
+	"author": "Abu Raihan <aburaihaninbox@gmail.com>",
+	"engines": {
+		"node": ">=16.0.0"
+	},
+	"sideEffects": false,
 	"scripts": {
 		"build": "bunup",
 		"dev": "bunup --watch",
 		"test": "bun test",
-		"test:watch": "bun test --watch"
+		"test:watch": "bun test --watch",
+		"prepublishOnly": "bun run build && bun run test"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.2.23",
@@ -40,11 +68,5 @@
 		"typescript": {
 			"optional": true
 		}
-	},
-	"license": "MIT",
-	"author": "Abu Raihan",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/aburaihan/billjs"
 	}
 }
