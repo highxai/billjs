@@ -1,5 +1,27 @@
 export type Decimal = number; // numeric values; rounding controlled by config
 
+// ---------- Custom Errors for DX ----------
+export class BillingError extends Error {
+  constructor(message: string, public code?: string) {
+    super(message);
+    this.name = 'BillingError';
+  }
+}
+
+export class ValidationError extends BillingError {
+  constructor(message: string, public field?: string) {
+    super(message, 'VALIDATION_ERROR');
+    this.name = 'ValidationError';
+  }
+}
+
+export class CalculationError extends BillingError {
+  constructor(message: string) {
+    super(message, 'CALCULATION_ERROR');
+    this.name = 'CalculationError';
+  }
+}
+
 // ---------- Enums & Helpers ----------
 export enum DiscountKind {
   FIXED = "fixed",
@@ -51,6 +73,7 @@ export interface BillItem {
   name: string;
   qty: number; // must be >= 0
   unitPrice: number; // price per unit (currency)
+  currency?: string; // currency code, defaults to config.currency
   taxFree?: boolean; // if true, item is not subject to configured taxes
   discount?: ItemDiscount; // optional item-level discount
   // optional per-item flags to override applyOn for charges/taxes can be added later
@@ -78,6 +101,8 @@ export interface TaxRule {
   inclusive?: boolean; // if true, configured base values are GST-inclusive
   applyOn?: "taxableBase" | "subtotal" | "charges" | "netAfterDiscount"; // default taxableBase
   enabled?: boolean; // toggle tax on/off
+  threshold?: number; // minimum base amount to apply tax
+  compound?: boolean; // if true, apply on base + previous taxes
 }
 
 // Config for calculation behavior
@@ -87,6 +112,9 @@ export interface BillingConfig {
   globalDiscount?: GlobalDiscount;
   decimalInternalPrecision?: number; // internal precision (default 6)
   billingIdPrefix?: string; // prefix for auto-generated billing id
+  currency?: string; // base currency code (default 'USD')
+  exchangeRates?: Record<string, number>; // exchange rates from base to other currencies
+  taxPreset?: string; // predefined tax regime (e.g., 'india', 'usa')
 }
 
 // ---------- Output Types ----------
@@ -127,6 +155,7 @@ export interface TaxBreakdown {
 export interface BillingResult {
   billingId: string;
   timestamp: string;
+  currency: string; // base currency
   subtotal: Decimal; // sum of basePrices
   totalItemDiscount: Decimal; // sum of item discounts
   globalDiscount: Decimal; // global discount applied (absolute)
@@ -135,9 +164,131 @@ export interface BillingResult {
   taxes: TaxBreakdown[];
   roundOff: Decimal;
   total: Decimal;
+  convertedTotals?: Record<string, Decimal>; // totals in other currencies
   items: ItemBreakdown[];
   formula: string[]; // human-readable formula steps
   meta?: Record<string, any>;
+}
+
+// ---------- Tax Presets ----------
+export const taxPresets: Record<string, TaxRule[]> = {
+  india: [
+    { name: "CGST", rate: 9, inclusive: true, applyOn: "netAfterDiscount" },
+    { name: "SGST", rate: 9, inclusive: true, applyOn: "netAfterDiscount" },
+  ],
+  usa: [
+    { name: "Sales Tax", rate: 8.25, inclusive: false, applyOn: "taxableBase" }, // example for CA
+  ],
+  eu: [
+    { name: "VAT", rate: 20, inclusive: false, applyOn: "taxableBase" }, // standard rate
+  ],
+  uk: [
+    { name: "VAT", rate: 20, inclusive: false, applyOn: "taxableBase" },
+  ],
+  canada: [
+    { name: "GST", rate: 5, inclusive: false, applyOn: "taxableBase" },
+    { name: "PST", rate: 7, inclusive: false, applyOn: "taxableBase" }, // example for BC
+  ],
+  australia: [
+    { name: "GST", rate: 10, inclusive: false, applyOn: "taxableBase" },
+  ],
+};
+
+export type TaxPreset = keyof typeof taxPresets;
+
+
+// ---------- Validation Helpers ----------
+function validatePayload(payload: {
+  billingId?: string | null;
+  config?: BillingConfig | null;
+  items: BillItem[];
+  charges?: Charge[] | null;
+  taxes?: TaxRule[] | null;
+  meta?: Record<string, any>;
+}): void {
+  if (!payload.items || !Array.isArray(payload.items)) {
+    throw new ValidationError('Items must be a non-empty array', 'items');
+  }
+  if (payload.items.length === 0) {
+    throw new ValidationError('At least one item is required', 'items');
+  }
+
+  payload.items.forEach((item, index) => {
+    if (!item.name || typeof item.name !== 'string' || item.name.trim().length === 0) {
+      throw new ValidationError(`Item ${index}: name is required and must be a non-empty string`, `items[${index}].name`);
+    }
+    if (typeof item.qty !== 'number' || item.qty < 0) {
+      throw new ValidationError(`Item ${index}: qty must be a non-negative number`, `items[${index}].qty`);
+    }
+    if (typeof item.unitPrice !== 'number' || item.unitPrice < 0) {
+      throw new ValidationError(`Item ${index}: unitPrice must be a non-negative number`, `items[${index}].unitPrice`);
+    }
+    if (item.discount) {
+      if (item.discount.kind === DiscountKind.PERCENT && (item.discount.value < 0 || item.discount.value > 100)) {
+        throw new ValidationError(`Item ${index}: discount percentage must be between 0 and 100`, `items[${index}].discount.value`);
+      }
+      if (item.discount.kind === DiscountKind.FIXED && item.discount.value < 0) {
+        throw new ValidationError(`Item ${index}: discount fixed value must be non-negative`, `items[${index}].discount.value`);
+      }
+    }
+  });
+
+  if (payload.charges) {
+    payload.charges.forEach((charge, index) => {
+      if (!charge.name || typeof charge.name !== 'string' || charge.name.trim().length === 0) {
+        throw new ValidationError(`Charge ${index}: name is required and must be a non-empty string`, `charges[${index}].name`);
+      }
+      if (typeof charge.value !== 'number' || charge.value < 0) {
+        throw new ValidationError(`Charge ${index}: value must be a non-negative number`, `charges[${index}].value`);
+      }
+      if (charge.applyOn && !['subtotal', 'taxableBase', 'netAfterDiscount'].includes(charge.applyOn)) {
+        throw new ValidationError(`Charge ${index}: applyOn must be one of 'subtotal', 'taxableBase', 'netAfterDiscount'`, `charges[${index}].applyOn`);
+      }
+    });
+  }
+
+  if (payload.taxes) {
+    payload.taxes.forEach((tax, index) => {
+      if (!tax.name || typeof tax.name !== 'string' || tax.name.trim().length === 0) {
+        throw new ValidationError(`Tax ${index}: name is required and must be a non-empty string`, `taxes[${index}].name`);
+      }
+      if (typeof tax.rate !== 'number' || tax.rate < 0) {
+        throw new ValidationError(`Tax ${index}: rate must be a non-negative number`, `taxes[${index}].rate`);
+      }
+      if (tax.applyOn && !['subtotal', 'taxableBase', 'charges', 'netAfterDiscount'].includes(tax.applyOn)) {
+        throw new ValidationError(`Tax ${index}: applyOn must be one of 'subtotal', 'taxableBase', 'charges', 'netAfterDiscount'`, `taxes[${index}].applyOn`);
+      }
+    });
+  }
+
+  if (payload.config) {
+    const config = payload.config;
+    if (config.decimalPlaces !== undefined && (typeof config.decimalPlaces !== 'number' || config.decimalPlaces < 0 || config.decimalPlaces > 10)) {
+      throw new ValidationError('Config: decimalPlaces must be a number between 0 and 10', 'config.decimalPlaces');
+    }
+    if (config.decimalInternalPrecision !== undefined && (typeof config.decimalInternalPrecision !== 'number' || config.decimalInternalPrecision < 0 || config.decimalInternalPrecision > 15)) {
+      throw new ValidationError('Config: decimalInternalPrecision must be a number between 0 and 15', 'config.decimalInternalPrecision');
+    }
+    if (config.globalDiscount) {
+      const g = config.globalDiscount;
+      if (g.kind === DiscountKind.PERCENT && (g.value < 0 || g.value > 100)) {
+        throw new ValidationError('Config: globalDiscount percentage must be between 0 and 100', 'config.globalDiscount.value');
+      }
+      if (g.kind === DiscountKind.FIXED && g.value < 0) {
+        throw new ValidationError('Config: globalDiscount fixed value must be non-negative', 'config.globalDiscount.value');
+      }
+    }
+    if (config.exchangeRates) {
+      for (const [curr, rate] of Object.entries(config.exchangeRates)) {
+        if (typeof rate !== 'number' || rate <= 0) {
+          throw new ValidationError(`Config: exchangeRates.${curr} must be a positive number`, `config.exchangeRates.${curr}`);
+        }
+      }
+    }
+    if (config.taxPreset && !taxPresets[config.taxPreset]) {
+      throw new ValidationError(`Config: unknown tax preset '${config.taxPreset}'`, 'config.taxPreset');
+    }
+  }
 }
 
 // ---------- Core Calculation Function ----------
@@ -150,6 +301,7 @@ export function calculateBill(payload: {
   taxes?: TaxRule[] | null;
   meta?: Record<string, any>;
 }): BillingResult {
+  validatePayload(payload);
   // defaults
   const config: BillingConfig = {
     decimalPlaces: 2,
@@ -157,6 +309,7 @@ export function calculateBill(payload: {
     globalDiscount: null,
     decimalInternalPrecision: 6,
     billingIdPrefix: "BILL",
+    currency: "USD",
     ...(payload.config || {}),
   };
 
@@ -172,7 +325,15 @@ export function calculateBill(payload: {
 
   const items = payload.items || [];
   const charges = payload.charges || [];
-  const taxes = (payload.taxes || []).filter((t) => t.enabled !== false); // default enabled
+  let taxes = (payload.taxes || []).filter((t) => t.enabled !== false); // default enabled
+
+  // Merge tax preset
+  if (config.taxPreset) {
+    if (!taxPresets[config.taxPreset]) {
+      throw new ValidationError(`Unknown tax preset: ${config.taxPreset}`, 'config.taxPreset');
+    }
+    taxes = taxes.concat(taxPresets[config.taxPreset].filter((t) => t.enabled !== false));
+  }
 
   // Step 1: per-item processing
   const itemBreakdowns: ItemBreakdown[] = [];
@@ -181,8 +342,13 @@ export function calculateBill(payload: {
 
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
+    const originalUnitPrice = it.unitPrice ?? 0;
+    let unitPrice = originalUnitPrice;
+    // Convert to base currency if different
+    if (it.currency && it.currency !== config.currency && config.exchangeRates?.[it.currency]) {
+      unitPrice = unitPrice / config.exchangeRates[it.currency];
+    }
     const qty = it.qty ?? 0;
-    const unitPrice = it.unitPrice ?? 0;
     const basePriceRaw = qty * unitPrice;
     const basePrice = internalRound(basePriceRaw, internalPrecision);
 
@@ -261,7 +427,7 @@ export function calculateBill(payload: {
       sku: it.sku,
       name: it.name,
       qty,
-      unitPrice: roundTo(unitPrice, decimalPlaces),
+      unitPrice: roundTo(originalUnitPrice, decimalPlaces),
       basePrice: roundTo(basePrice, decimalPlaces),
       itemDiscount: roundTo(itemDiscountAbs, decimalPlaces),
       netPrice: roundTo(netPrice, decimalPlaces),
@@ -345,9 +511,11 @@ export function calculateBill(payload: {
   }
   totalCharges = internalRound(totalCharges, internalPrecision);
 
-  // Step 4: compute taxes (respecting applyOn: taxableBase|subtotal|charges|netAfterDiscount)
+  // Step 4: compute taxes (respecting applyOn)
   const taxBreakdowns: TaxBreakdown[] = [];
-  let totalTaxes = 0;
+  let totalExclusiveTaxes = 0;
+  let totalInclusiveTaxes = 0; // just for reporting, already embedded
+  let totalTaxSoFar = 0;
 
   for (const t of taxes) {
     const applyOn = t.applyOn ?? "taxableBase";
@@ -357,42 +525,62 @@ export function calculateBill(payload: {
     else if (applyOn === "charges") base = totalCharges;
     else base = netAfterGlobalDiscount + totalCharges; // netAfterDiscount + charges
 
+    let effectiveBase = base;
+    if (t.compound) effectiveBase += totalTaxSoFar;
+
+    // Check threshold
+    if (t.threshold && effectiveBase < t.threshold) {
+      taxBreakdowns.push({
+        name: t.name,
+        rate: t.rate,
+        inclusive: t.inclusive ?? false,
+        applyOn,
+        amount: 0,
+        formula: `Below threshold: ${effectiveBase} < ${t.threshold}`,
+      });
+      continue;
+    }
+
     let taxAmount = 0;
     if (t.inclusive) {
-      // if inclusive, we assume base is already inclusive of this tax; extract portion
+      // Extract tax portion
       const netBase = internalRound(
-        base / (1 + t.rate / 100),
+        effectiveBase / (1 + t.rate / 100),
         internalPrecision
       );
-      taxAmount = internalRound(base - netBase, internalPrecision);
+      taxAmount = internalRound(effectiveBase - netBase, internalPrecision);
+      totalInclusiveTaxes += taxAmount;
       taxBreakdowns.push({
         name: t.name,
         rate: t.rate,
         inclusive: true,
         applyOn,
         amount: roundTo(taxAmount, decimalPlaces),
-        formula: `Inclusive: ${base} - (${base} ÷ (1 + ${t.rate}/100)) = ${taxAmount}`,
+        formula: `Inclusive${t.compound ? ' (compound)' : ''}: ${effectiveBase} - (${effectiveBase} ÷ (1 + ${t.rate}/100)) = ${taxAmount}`,
       });
     } else {
-      taxAmount = internalRound(base * (t.rate / 100), internalPrecision);
+      // Additive tax
+      taxAmount = internalRound(effectiveBase * (t.rate / 100), internalPrecision);
+      totalExclusiveTaxes += taxAmount;
       taxBreakdowns.push({
         name: t.name,
         rate: t.rate,
         inclusive: false,
         applyOn,
         amount: roundTo(taxAmount, decimalPlaces),
-        formula: `${base} × ${t.rate}/100 = ${taxAmount}`,
+        formula: `${effectiveBase} × ${t.rate}/100${t.compound ? ' (compound)' : ''} = ${taxAmount}`,
       });
     }
-    totalTaxes += taxAmount;
+    totalTaxSoFar += taxAmount;
   }
 
-  totalTaxes = internalRound(totalTaxes, internalPrecision);
+  totalExclusiveTaxes = internalRound(totalExclusiveTaxes, internalPrecision);
+  totalInclusiveTaxes = internalRound(totalInclusiveTaxes, internalPrecision);
 
-  // Step 5: final total (net + charges + taxes)
-  // Note: if taxes were inclusive, they were already embedded in 'base' for that tax — but for totals we include tax amounts explicitly.
+  // Step 5: final total
+  // Inclusive taxes are already inside netAfterGlobalDiscount + charges
   const beforeRoundTotal = internalRound(
-    netAfterGlobalDiscount + totalCharges + totalTaxes,
+    netAfterGlobalDiscount + totalCharges + totalExclusiveTaxes,
     internalPrecision
   );
 
@@ -426,8 +614,17 @@ export function calculateBill(payload: {
     formulaSteps.push(
       `Total charges = ${roundTo(totalCharges, decimalPlaces)}`
     );
-  if (totalTaxes > 0)
-    formulaSteps.push(`Total taxes = ${roundTo(totalTaxes, decimalPlaces)}`);
+  if (totalInclusiveTaxes > 0)
+    formulaSteps.push(
+      `Inclusive taxes (already in price) = ${roundTo(
+        totalInclusiveTaxes,
+        decimalPlaces
+      )}`
+    );
+  if (totalExclusiveTaxes > 0)
+    formulaSteps.push(
+      `Exclusive taxes (added) = ${roundTo(totalExclusiveTaxes, decimalPlaces)}`
+    );
   formulaSteps.push(
     `Total (before rounding) = ${roundTo(beforeRoundTotal, decimalPlaces)}`
   );
@@ -437,10 +634,20 @@ export function calculateBill(payload: {
     );
   formulaSteps.push(`Final total = ${roundTo(finalTotal, decimalPlaces)}`);
 
+  // Compute converted totals if exchange rates provided
+  let convertedTotals: Record<string, Decimal> | undefined;
+  if (config.exchangeRates) {
+    convertedTotals = {};
+    for (const [curr, rate] of Object.entries(config.exchangeRates)) {
+      convertedTotals[curr] = roundTo(finalTotal * rate, decimalPlaces);
+    }
+  }
+
   // Assemble result
   const result: BillingResult = {
     billingId,
     timestamp: ts,
+    currency: config.currency!,
     subtotal: roundTo(subtotal, decimalPlaces),
     totalItemDiscount: roundTo(totalItemDiscount, decimalPlaces),
     globalDiscount: roundTo(globalDiscountAbs, decimalPlaces),
@@ -449,6 +656,7 @@ export function calculateBill(payload: {
     taxes: taxBreakdowns,
     roundOff: roundTo(roundDiff, decimalPlaces),
     total: roundTo(finalTotal, decimalPlaces),
+    convertedTotals,
     items: itemBreakdowns,
     formula: formulaSteps,
     meta: payload.meta ?? {},

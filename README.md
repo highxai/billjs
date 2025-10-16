@@ -2,18 +2,24 @@
 
 # **billjs**
 
-A lightweight TypeScript billing engine for invoices, receipts, and point-of-sale systems.  
- Supports item-level and global discounts, charges, configurable tax rules (inclusive/exclusive), safe rounding, and transparent calculation breakdowns.
+A comprehensive TypeScript billing engine for invoices, receipts, and point-of-sale systems.
+Supports multi-currency, localization presets, complex tax scenarios, item-level and global discounts, charges, safe rounding, detailed breakdowns, and excellent developer experience with validation and error handling.
+
+📚 **[Full Documentation](./docs/)**
 
 ---
 
 ## **✨ Features**
 
+* **Multi-currency support** with exchange rates and conversions.
+
+* **Localization presets** for tax regimes (VAT, GST, sales tax by region/country).
+
+* **Complex tax scenarios** (inclusive/exclusive, compound taxes, thresholds, exemptions).
+
 * Item-level & global discounts (fixed or percentage).
 
 * Configurable charges (fixed or percentage, flexible base).
-
-* Taxes (inclusive/exclusive, different applyOn bases).
 
 * Safe rounding & consistent precision.
 
@@ -21,12 +27,53 @@ A lightweight TypeScript billing engine for invoices, receipts, and point-of-sal
 
 * Auto-generated billing IDs.
 
+* **Developer Experience**: Comprehensive validation, detailed error messages, extensive test suite, type safety.
+
 ---
 
 ## **🚀 Installation**
 
 ```bash
 npm install billjs
+---
+```
+
+## **📖 Quick Start**
+```typescript
+import { calculateBill, DiscountKind, ChargeKind } from "billjs";
+
+const result = calculateBill({
+  items: [
+    {
+      name: "Laptop",
+      qty: 1,
+      unitPrice: 1000,
+      discount: { kind: DiscountKind.PERCENT, value: 10 }, // 10% off
+    },
+    { name: "Mouse", qty: 2, unitPrice: 50 },
+  ],
+  charges: [
+    { name: "Delivery", kind: ChargeKind.FIXED, value: 20 },
+    { name: "Service Fee", kind: ChargeKind.PERCENT, value: 2 },
+  ],
+  taxes: [
+    { name: "GST", rate: 18, inclusive: false, applyOn: "netAfterDiscount" },
+  ],
+  config: {
+    billingIdPrefix: "INV",
+    decimalPlaces: 2,
+    roundOff: true,
+    taxPreset: "india", // Use India tax preset
+    currency: "USD",
+    exchangeRates: { EUR: 0.85 }, // Convert to EUR
+  },
+});
+
+console.log(result.total);       // → Final total in USD
+console.log(result.convertedTotals?.EUR); // → Total in EUR
+console.log(result.items);       // → Per-item breakdown
+console.log(result.taxes);       // → Applied tax breakdown
+console.log(result.formula);     // → Human-readable steps
 ```
 ---
 
@@ -96,6 +143,33 @@ Flexible rules:
 * `inclusive: false` → added on top.
 
 * `applyOn`: `"taxableBase" | "subtotal" | "charges" | "netAfterDiscount"`.
+
+---
+
+## **🌍 Advanced Features**
+
+### Multi-Currency Support
+```typescript
+config: {
+  currency: "USD",
+  exchangeRates: { EUR: 0.85, GBP: 0.75 }
+}
+result.convertedTotals // { EUR: 85, GBP: 75 }
+```
+
+### Tax Presets
+```typescript
+config: { taxPreset: "india" } // CGST + SGST @9% each
+config: { taxPreset: "eu" }    // VAT @20%
+```
+
+### Complex Taxes
+```typescript
+taxes: [
+  { name: "Tax", rate: 10, threshold: 100 }, // Minimum threshold
+  { name: "Surcharge", rate: 5, compound: true } // Compound calculation
+]
+```
 
 ---
 
