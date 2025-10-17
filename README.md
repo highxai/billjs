@@ -5,7 +5,7 @@
 A comprehensive TypeScript billing engine for invoices, receipts, and point-of-sale systems.
 Supports multi-currency, localization presets, complex tax scenarios, item-level and global discounts, charges, safe rounding, detailed breakdowns, and excellent developer experience with validation and error handling.
 
-📚 **[Full Documentation](./docs/)**
+📚 **[Full Documentation](https://github.com/highxai/billjs/tree/master/docs)**
 
 ---
 
