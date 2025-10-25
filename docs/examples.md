@@ -3,16 +3,227 @@
 ## Basic Invoice
 
 ```typescript
-import { calculateBill } from "billjs";
+import { createBill, addItem, calculateTotal, pipe } from "billjs";
+```
 
-const result = calculateBill({
-  items: [
-    { name: "Laptop", qty: 1, unitPrice: 1000 },
-    { name: "Mouse", qty: 2, unitPrice: 50 }
-  ]
-});
+## With Discounts
 
-console.log(`Total: $${result.total}`); // Total: $1100
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, {
+    id: "laptop",
+    name: "Laptop",
+    qty: 1,
+    unitPrice: 1000,
+    discounts: [{ id: "promo", type: "PERCENT", value: 10 }] // 10% off
+  }),
+  (bill) => addItem(bill, { id: "mouse", name: "Mouse", qty: 2, unitPrice: 50 }),
+  (bill) => addGlobalDiscount(bill, { id: "bulk", type: "FIXED", value: 20 }), // $20 off entire bill
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`); // $1100
+console.log(`Discounts: $${result.discounts}`); // $120
+console.log(`Total: $${result.total}`); // $980
+```
+
+## With Taxes
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, { id: "laptop", name: "Laptop", qty: 1, unitPrice: 1000 }),
+  (bill) => addTaxRule(bill, { name: "GST", rate: 18 }),
+  calculateTotal
+);
+
+console.log(`Tax: $${result.taxes}`); // $180
+console.log(`Total: $${result.total}`); // $1180
+```
+
+## Inclusive Taxes
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, { id: "item", name: "Item", qty: 1, unitPrice: 118 }), // Price includes tax
+  (bill) => addTaxRule(bill, { name: "GST", rate: 18, inclusive: true }),
+  calculateTotal
+);
+
+console.log(`Tax Extracted: $${result.taxes}`); // $18
+console.log(`Subtotal (net): $${result.subtotal}`); // $100
+console.log(`Total: $${result.total}`); // $118
+```
+
+## Addons and Variations
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, {
+    id: "pizza",
+    name: "Pizza",
+    qty: 2,
+    unitPrice: 10,
+    addons: [
+      { id: "cheese", name: "Extra Cheese", qty: 1, unitPrice: 2 }
+    ],
+    variations: [
+      { id: "size", name: "Large", qty: 1, unitPrice: 3 }
+    ]
+  }),
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`); // $30 (2 * (10 + 2 + 3))
+console.log(`Total: $${result.total}`); // $30
+```
+
+## Tiered Discounts
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, { id: "item", name: "Item", qty: 1, unitPrice: 1500 }),
+  (bill) => addGlobalDiscount(bill, {
+    id: "bulk",
+    type: "TIERED",
+    tiers: [
+      { minSubtotal: 0, rate: 0 },
+      { minSubtotal: 1000, rate: 5 },
+      { minSubtotal: 2000, rate: 10 }
+    ]
+  }),
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`); // $1500
+console.log(`Discount: $${result.discounts}`); // $75 (5% of 1500)
+console.log(`Total: $${result.total}`); // $1425
+```
+
+## Compound Taxes
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, { id: "item", name: "Item", qty: 1, unitPrice: 100 }),
+  (bill) => addTaxRule(bill, { name: "GST", rate: 5 }),
+  (bill) => addTaxRule(bill, { name: "PST", rate: 8, compound: true }),
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`); // $100
+console.log(`Taxes: $${result.taxes}`); // $13.4 (5 + 8.4)
+console.log(`Total: $${result.total}`); // $113.4
+```
+
+## Multi-Currency
+
+```typescript
+const result = pipe(
+  createBill({ currency: "EUR", exchangeRate: 1.1 }),
+  (bill) => addItem(bill, { id: "item", name: "Item", qty: 1, unitPrice: 100 }),
+  calculateTotal
+);
+
+console.log(`EUR Total: €${result.total}`); // €110
+```
+
+## Plugins
+
+### Loyalty Points
+
+```typescript
+import { loyaltyPointsPlugin } from "billjs/plugins";
+```
+
+### Regional Tax
+
+```typescript
+import { regionTaxPlugin } from "billjs/plugins";
+```
+
+### Promo Code
+
+```typescript
+import { promoPlugin } from "billjs/plugins";
+```
+
+## E-commerce Example
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD", decimalPlaces: 2 }),
+  (bill) => addItem(bill, {
+    id: "headphones",
+    name: "Wireless Headphones",
+    qty: 1,
+    unitPrice: 199.99,
+    discounts: [{ id: "sale", type: "PERCENT", value: 15 }]
+  }),
+  (bill) => addItem(bill, {
+    id: "cable",
+    name: "USB Cable",
+    qty: 2,
+    unitPrice: 9.99
+  }),
+  (bill) => addGlobalDiscount(bill, {
+    id: "bulk",
+    type: "TIERED",
+    tiers: [
+      { minSubtotal: 0, rate: 0 },
+      { minSubtotal: 2000, rate: 5 }
+    ]
+  }),
+  (bill) => addTaxRule(bill, { name: "Sales Tax", rate: 8.875 }),
+  (bill) => usePlugin(bill, loyaltyPointsPlugin({ rate: 0.01 })),
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`);
+console.log(`Discounts: $${result.discounts}`);
+console.log(`Taxes: $${result.taxes}`);
+console.log(`Total: $${result.total}`);
+console.log(`Loyalty Points: ${result.meta.loyaltyPoints}`);
+```
+
+## Restaurant POS Example
+
+```typescript
+const result = pipe(
+  createBill({ currency: "USD" }),
+  (bill) => addItem(bill, {
+    id: "burger",
+    name: "Burger",
+    qty: 2,
+    unitPrice: 12.99,
+    addons: [
+      { id: "bacon", name: "Extra Bacon", qty: 1, unitPrice: 2.5 },
+      { id: "cheese", name: "Extra Cheese", qty: 1, unitPrice: 1.5 }
+    ]
+  }),
+  (bill) => addItem(bill, {
+    id: "fries",
+    name: "French Fries",
+    qty: 2,
+    unitPrice: 4.99
+  }),
+  (bill) => addItem(bill, {
+    id: "drink",
+    name: "Soft Drink",
+    qty: 2,
+    unitPrice: 2.99
+  }),
+  (bill) => addTaxRule(bill, { name: "Sales Tax", rate: 7 }),
+  calculateTotal
+);
+
+console.log(`Subtotal: $${result.subtotal}`); // $49.94
+console.log(`Taxes: $${result.taxes}`); // $3.50
+console.log(`Total: $${result.total}`); // $53.44
 ```
 
 ## With Discounts

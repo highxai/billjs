@@ -2,213 +2,205 @@
 
 ## Core Functions
 
-### `calculateBill(payload: CalculateBillPayload): BillingResult`
+### `createBill(config: BillConfig): BillContext`
 
-Calculates the total bill with all components.
+Creates a new bill context with the specified configuration.
 
 #### Parameters
 
 ```typescript
-interface CalculateBillPayload {
-  billingId?: string | null;
-  config?: BillingConfig | null;
-  items: BillItem[];
-  charges?: Charge[] | null;
-  taxes?: TaxRule[] | null;
-  meta?: Record<string, any>;
+interface BillConfig {
+  currency: string;
+  exchangeRate?: number;
+  decimalPlaces?: number;
+  roundOff?: boolean;
 }
 ```
 
 #### Returns
 
 ```typescript
-interface BillingResult {
-  billingId: string;
-  timestamp: string;
-  currency: string;
-  subtotal: Decimal;
-  totalItemDiscount: Decimal;
-  globalDiscount: Decimal;
-  taxableBase: Decimal;
-  charges: ChargeBreakdown[];
-  taxes: TaxBreakdown[];
-  roundOff: Decimal;
-  total: Decimal;
-  convertedTotals?: Record<string, Decimal>;
-  items: ItemBreakdown[];
-  formula: string[];
-  meta?: Record<string, any>;
+interface BillContext {
+  items: BillItem[];
+  discounts: Discount[];
+  taxes: TaxRule[];
+  config: BillConfig;
+  plugins: BillPlugin[];
+  meta: Record<string, any>;
 }
 ```
 
-## Types
+### `addItem(bill: BillContext, item: BillItem): BillContext`
 
-### Enums
+Adds an item to the bill immutably.
 
-```typescript
-enum DiscountKind {
-  FIXED = "fixed",
-  PERCENT = "percentage"
-}
+#### Parameters
 
-enum ChargeKind {
-  FIXED = "fixed",
-  PERCENT = "percentage"
-}
-```
-
-### Interfaces
-
-#### BillItem
+- `bill`: The current bill context
+- `item`: The item to add
 
 ```typescript
 interface BillItem {
-  sku?: string;
+  id: string;
   name: string;
   qty: number;
   unitPrice: number;
-  currency?: string;
-  taxFree?: boolean;
-  discount?: ItemDiscount;
+  addons?: BillItem[];
+  variations?: BillItem[];
+  discounts?: Discount[];
 }
 ```
 
-#### ItemDiscount
+### `addGlobalDiscount(bill: BillContext, discount: Discount): BillContext`
+
+Adds a global discount to the bill.
+
+#### Parameters
+
+- `bill`: The current bill context
+- `discount`: The discount to add
 
 ```typescript
-type ItemDiscount =
-  | { kind: DiscountKind.FIXED; value: number }
-  | { kind: DiscountKind.PERCENT; value: number };
-```
-
-#### GlobalDiscount
-
-```typescript
-type GlobalDiscount =
-  | { kind: DiscountKind.FIXED; value: number }
-  | { kind: DiscountKind.PERCENT; value: number }
-  | null;
-```
-
-#### Charge
-
-```typescript
-interface Charge {
-  name: string;
-  kind: ChargeKind;
-  value: number;
-  applyOn?: "subtotal" | "taxableBase" | "netAfterDiscount";
+interface Discount {
+  id: string;
+  type: "PERCENT" | "FIXED" | "TIERED";
+  value?: number;
+  tiers?: { minSubtotal: number; rate: number }[];
 }
 ```
 
-#### TaxRule
+### `addTaxRule(bill: BillContext, tax: TaxRule): BillContext`
+
+Adds a tax rule to the bill.
+
+#### Parameters
+
+- `bill`: The current bill context
+- `tax`: The tax rule to add
 
 ```typescript
 interface TaxRule {
   name: string;
   rate: number;
+  applyOn?: "subtotal" | "taxableBase";
   inclusive?: boolean;
-  applyOn?: "taxableBase" | "subtotal" | "charges" | "netAfterDiscount";
-  enabled?: boolean;
-  threshold?: number;
   compound?: boolean;
 }
 ```
 
-#### BillingConfig
+### `usePlugin(bill: BillContext, plugin: BillPlugin | BillPlugin[]): BillContext`
+
+Adds one or more plugins to the bill.
+
+#### Parameters
+
+- `bill`: The current bill context
+- `plugin`: The plugin(s) to add
 
 ```typescript
-interface BillingConfig {
-  decimalPlaces?: number;
-  roundOff?: boolean;
-  globalDiscount?: GlobalDiscount;
-  decimalInternalPrecision?: number;
-  billingIdPrefix?: string;
-  currency?: string;
-  exchangeRates?: Record<string, number>;
-  taxPreset?: TaxPreset;
-}
-```
-
-#### ItemBreakdown
-
-```typescript
-interface ItemBreakdown {
-  index: number;
-  sku?: string;
+interface BillPlugin {
   name: string;
-  qty: number;
-  unitPrice: Decimal;
-  basePrice: Decimal;
-  itemDiscount: Decimal;
-  netPrice: Decimal;
-  taxableAmount: Decimal;
-  taxesApplied: { name: string; amount: Decimal; formula: string }[];
-  total: Decimal;
-  formula: string;
+  version?: string;
+  setup?: (bill: BillContext) => BillContext;
+  transform?: (
+    phase: "beforeCalc" | "afterCalc",
+    bill: BillContext
+  ) => BillContext;
 }
 ```
 
-#### ChargeBreakdown
+### `setMeta(bill: BillContext, key: string, value: any): BillContext`
+
+Sets metadata on the bill.
+
+#### Parameters
+
+- `bill`: The current bill context
+- `key`: The metadata key
+- `value`: The metadata value
+
+### `calculateTotal(bill: BillContext): BillResult`
+
+Calculates the total bill and returns the result.
+
+#### Parameters
+
+- `bill`: The bill context to calculate
+
+#### Returns
 
 ```typescript
-interface ChargeBreakdown {
-  name: string;
-  kind: ChargeKind;
-  value: number;
-  applyOn: string;
-  amount: Decimal;
-  formula: string;
+interface BillResult {
+  subtotal: number;
+  discounts: number;
+  taxes: number;
+  total: number;
+  breakdown: {
+    items: Array<{ id: string; name: string; total: number }>;
+    taxBreakdown: Array<{
+      name: string;
+      rate: number;
+      inclusive?: boolean;
+      amount: number;
+    }>;
+    discountBreakdown?: Array<{
+      id: string;
+      type: string;
+      amount: number;
+    }>;
+  };
+  meta: Record<string, any>;
 }
 ```
 
-#### TaxBreakdown
+### `pipe<T>(initial: T, ...fns: Array<(arg: any) => any>): any`
+
+Utility function for chaining operations.
+
+#### Parameters
+
+- `initial`: The initial value
+- `...fns`: Functions to apply in sequence
+
+## Plugins
+
+### `loyaltyPointsPlugin(opts: { rate: number }): BillPlugin`
+
+Plugin that adds loyalty points based on total.
+
+#### Parameters
 
 ```typescript
-interface TaxBreakdown {
-  name: string;
-  rate: number;
-  inclusive: boolean;
-  applyOn: string;
-  amount: Decimal;
-  formula: string;
+{ rate: number } // Points per dollar spent
+```
+
+### `regionTaxPlugin(opts: { region: string; vatRates: Record<string, number> }): BillPlugin`
+
+Plugin that applies regional VAT taxes.
+
+#### Parameters
+
+```typescript
+{
+  region: string; // Region code
+  vatRates: Record<string, number>; // VAT rates by region
 }
 ```
 
-## Tax Presets
+### `promoPlugin(opts: { code: string; validate: (code: string, bill: BillContext) => boolean; discount: Discount }): BillPlugin`
+
+Plugin that applies promo code discounts.
+
+#### Parameters
 
 ```typescript
-type TaxPreset = keyof typeof taxPresets;
-
-const taxPresets: Record<string, TaxRule[]> = {
-  india: [/* CGST + SGST */],
-  usa: [/* Sales Tax */],
-  eu: [/* VAT */],
-  uk: [/* VAT */],
-  canada: [/* GST + PST */],
-  australia: [/* GST */]
-};
-```
-
-## Error Classes
-
-```typescript
-class BillingError extends Error {
-  constructor(message: string, public code?: string);
-}
-
-class ValidationError extends BillingError {
-  constructor(message: string, public field?: string);
-}
-
-class CalculationError extends BillingError {
-  constructor(message: string);
+{
+  code: string; // Promo code
+  validate: (code: string, bill: BillContext) => boolean; // Validation function
+  discount: Discount; // Discount to apply
 }
 ```
 
 ## Types
 
-```typescript
-type Decimal = number;
-type TaxPreset = "india" | "usa" | "eu" | "uk" | "canada" | "australia";
-```
+All types are fully typed with TypeScript for type safety.

@@ -1,17 +1,17 @@
-# BillJS Documentation
+# Billing Engine Documentation
 
 ## Overview
 
-BillJS is a comprehensive TypeScript billing engine designed for invoices, receipts, and point-of-sale systems. It provides robust support for complex billing scenarios including multi-currency, international tax regimes, discounts, charges, and detailed calculation breakdowns.
+The Billing Engine is a comprehensive TypeScript library for handling complex billing calculations in invoices, receipts, and point-of-sale systems. It features an immutable API, plugin system, and support for multi-currency, tiered discounts, addons/variations, and flexible tax rules.
 
 ## Key Features
 
-- **Multi-Currency Support**: Handle multiple currencies with automatic exchange rate conversions
-- **Tax Localization**: Built-in presets for major tax regimes (GST, VAT, Sales Tax)
-- **Complex Tax Calculations**: Inclusive/exclusive taxes, thresholds, compound taxes
-- **Flexible Discounts & Charges**: Item-level and global discounts, configurable charges
-- **Developer Experience**: Strong TypeScript types, comprehensive validation, detailed error messages
-- **Safe Calculations**: Precision handling and rounding for financial accuracy
+- **Immutable API**: All operations return new instances without mutating the original bill
+- **Plugin System**: Extensible with custom plugins for loyalty points, regional taxes, promo codes, etc.
+- **Complex Calculations**: Support for addons, variations, tiered discounts, compound taxes, and inclusive/exclusive taxes
+- **Multi-Currency**: Exchange rate support for international billing
+- **Type Safety**: Full TypeScript support with comprehensive type definitions
+- **Precision Handling**: Uses Decimal.js for accurate financial calculations
 
 ## Installation
 
@@ -22,171 +22,150 @@ npm install billjs
 ## Quick Start
 
 ```typescript
-import { calculateBill, DiscountKind, ChargeKind } from "billjs";
-
-const result = calculateBill({
-  items: [
-    {
-      name: "Laptop",
-      qty: 1,
-      unitPrice: 1000,
-      discount: { kind: DiscountKind.PERCENT, value: 10 }, // 10% off
-    },
-    { name: "Mouse", qty: 2, unitPrice: 50 },
-  ],
-  charges: [
-    { name: "Delivery", kind: ChargeKind.FIXED, value: 20 },
-    { name: "Service Fee", kind: ChargeKind.PERCENT, value: 2 },
-  ],
-  taxes: [
-    { name: "GST", rate: 18, inclusive: false, applyOn: "netAfterDiscount" },
-  ],
-  config: {
-    billingIdPrefix: "INV",
-    decimalPlaces: 2,
-    roundOff: true,
-    taxPreset: "india", // Use India tax preset
-    currency: "USD",
-    exchangeRates: { EUR: 0.85 }, // Convert to EUR
-  },
-});
-
-console.log(result.total);       // → Final total in USD
-console.log(result.convertedTotals?.EUR); // → Total in EUR
-console.log(result.items);       // → Per-item breakdown
-console.log(result.taxes);       // → Applied tax breakdown
-console.log(result.formula);     // → Human-readable steps
+import { createBill, addItem, addTaxRule, calculateTotal, pipe } from "billjs";
 ```
 
 ## Concepts
 
+### Bill Context
+
+The bill context holds all billing data and is immutable:
+
+```typescript
+interface BillContext {
+  items: BillItem[];
+  discounts: Discount[];
+  taxes: TaxRule[];
+  config: BillConfig;
+  plugins: BillPlugin[];
+  meta: Record<string, any>;
+}
+```
+
 ### Items
 
-Each item represents a billable product or service:
+Items can have addons and variations, and support item-level discounts:
 
 ```typescript
 interface BillItem {
-  sku?: string; // Optional SKU
-  name: string; // Required item name
-  qty: number; // Quantity (must be >= 0)
-  unitPrice: number; // Price per unit
-  currency?: string; // Currency code (defaults to config.currency)
-  taxFree?: boolean; // Exempt from taxes
-  discount?: ItemDiscount; // Item-level discount
+  id: string;
+  name: string;
+  qty: number;
+  unitPrice: number;
+  addons?: BillItem[]; // Additional items per unit
+  variations?: BillItem[]; // Variations per unit
+  discounts?: Discount[]; // Item-level discounts
 }
 ```
 
 ### Discounts
 
-Discounts can be applied at item level or globally:
+Three types of discounts: percent, fixed, and tiered:
 
 ```typescript
-// Item-level discount
-discount: { kind: DiscountKind.FIXED, value: 50 } // $50 off
-discount: { kind: DiscountKind.PERCENT, value: 10 } // 10% off
-
-// Global discount in config
-globalDiscount: { kind: DiscountKind.PERCENT, value: 5 }
-```
-
-### Charges
-
-Additional fees applied to the bill:
-
-```typescript
-charges: [
-  { name: "Delivery", kind: ChargeKind.FIXED, value: 20 },
-  { name: "Service Fee", kind: ChargeKind.PERCENT, value: 2, applyOn: "subtotal" }
-]
+interface Discount {
+  id: string;
+  type: "PERCENT" | "FIXED" | "TIERED";
+  value?: number; // For PERCENT and FIXED
+  tiers?: { minSubtotal: number; rate: number }[]; // For TIERED
+}
 ```
 
 ### Taxes
 
-Flexible tax configuration:
+Flexible tax rules with inclusive/exclusive and compound options:
 
 ```typescript
-taxes: [
-  {
-    name: "GST",
-    rate: 18,
-    inclusive: false, // true if price includes tax
-    applyOn: "netAfterDiscount", // where to apply
-    threshold: 100, // minimum amount
-    compound: false // apply on top of other taxes
-  }
-]
+interface TaxRule {
+  name: string;
+  rate: number;
+  applyOn?: "subtotal" | "taxableBase"; // Where to apply
+  inclusive?: boolean; // True if price includes tax
+  compound?: boolean; // Apply on base + previous taxes
+}
 ```
 
 ### Configuration
 
 ```typescript
-interface BillingConfig {
+interface BillConfig {
+  currency: string;
+  exchangeRate?: number; // For currency conversion
   decimalPlaces?: number; // Rounding precision
   roundOff?: boolean; // Final rounding
-  globalDiscount?: GlobalDiscount;
-  currency?: string; // Base currency
-  exchangeRates?: Record<string, number>; // Conversion rates
-  taxPreset?: TaxPreset; // Predefined tax regime
 }
 ```
 
 ## Advanced Features
 
+### Addons and Variations
+
+Items can have nested addons and variations:
+
+```typescript
+const bill = addItem(createBill({ currency: "USD" }), {
+  id: "pizza",
+  name: "Pizza",
+  qty: 2,
+  unitPrice: 10,
+  addons: [
+    { id: "cheese", name: "Extra Cheese", qty: 1, unitPrice: 2 }
+  ],
+  variations: [
+    { id: "size", name: "Large", qty: 1, unitPrice: 3 }
+  ]
+});
+// Total per pizza: 10 + 2 + 3 = 15, for 2 pizzas: 30
+```
+
+### Tiered Discounts
+
+Discounts that scale with subtotal:
+
+```typescript
+const discount: Discount = {
+  id: "bulk",
+  type: "TIERED",
+  tiers: [
+    { minSubtotal: 0, rate: 0 },
+    { minSubtotal: 1000, rate: 5 },
+    { minSubtotal: 2000, rate: 10 }
+  ]
+};
+// 5% off on $1500 subtotal, 10% off on $2500
+```
+
+### Compound Taxes
+
+Taxes applied on top of other taxes:
+
+```typescript
+const bill = pipe(
+  createBill({ currency: "USD" }),
+  (b) => addItem(b, { id: "item", name: "Item", qty: 1, unitPrice: 100 }),
+  (b) => addTaxRule(b, { name: "GST", rate: 5 }),
+  (b) => addTaxRule(b, { name: "PST", rate: 8, compound: true })
+  // PST applied on 100 + 5 = 105, total tax = 5 + 8.4 = 13.4
+);
+```
+
 ### Multi-Currency
 
 ```typescript
-// Item in different currency
-items: [
-  { name: "Item", qty: 1, unitPrice: 100, currency: "EUR" }
-]
-
-// Config with exchange rates
-config: {
-  currency: "USD",
-  exchangeRates: { EUR: 1.1 } // 1 USD = 1.1 EUR
-}
-
-// Result includes conversions
-result.convertedTotals // { EUR: 90.91 }
+const result = pipe(
+  createBill({ currency: "EUR", exchangeRate: 1.2 }),
+  (b) => addItem(b, { id: "item", name: "Item", qty: 1, unitPrice: 100 }),
+  calculateTotal
+);
+// Total in EUR: 100 * 1.2 = 120
 ```
 
-### Tax Presets
+### Plugins
 
-Use predefined tax configurations:
-
-```typescript
-config: { taxPreset: "india" } // CGST 9% + SGST 9%
-config: { taxPreset: "eu" }    // VAT 20%
-config: { taxPreset: "usa" }   // Sales Tax 8.25%
-```
-
-Available presets: `india`, `usa`, `eu`, `uk`, `canada`, `australia`
-
-### Complex Taxes
+Extend functionality with plugins:
 
 ```typescript
-taxes: [
-  // Threshold: only apply if base >= 100
-  { name: "Tax", rate: 10, threshold: 100 },
-
-  // Compound: apply on base + previous taxes
-  { name: "Surcharge", rate: 5, compound: true }
-]
-```
-
-## Error Handling
-
-BillJS provides detailed validation and error messages:
-
-```typescript
-try {
-  const result = calculateBill(payload);
-} catch (error) {
-  if (error instanceof ValidationError) {
-    console.log(error.message); // Detailed validation message
-    console.log(error.field);   // Specific field that failed
-  }
-}
+import { loyaltyPointsPlugin } from "billjs/plugins";
 ```
 
 ## API Reference
